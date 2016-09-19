@@ -1,14 +1,20 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 )
 
-// these arguments will be data-driven in the future
-// just creates a new request object from data
+type Message struct {
+	Action string
+	Data   string
+}
+
 func createRequest(verb, url string, body io.Reader, headers map[string]string) (http.Request, error) {
 	req, err := http.NewRequest(verb, url, body)
 	for k, v := range headers {
@@ -22,23 +28,33 @@ func getAPIKey() string {
 	return os.Getenv("BADGER_API")
 }
 
-func main() {
-	// TODO:  hookup to db
-	url := "https://api.projectoxford.ai/vision/v1.0/model"
+func inboundHandler(w http.ResponseWriter, r *http.Request) {
+	var message Message
 
-	// TODO:  hookup to db
-	var headers = map[string]string{
-		"Ocp-Apim-Subscription-Key": getAPIKey(),
+	if r.Body == nil {
+		http.Error(w, "No request body found", 400)
+		return
 	}
 
-	// TODO: add error handling & defaults for
-	//	- timeouts
-	//	- connection errors
-	//	- non-OK response codes
+	err := json.NewDecoder(r.Body).Decode(&message)
+
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	var config OutboundConfig
+
+	config = GetConfig(message)
+
+	// TODO: add error handling & defaults for newtwork call
 	httpClient := &http.Client{}
 
-	// TODO:  hookup to db
-	req, err := createRequest("GET", url, nil, headers)
+	// TODO: make headers more configurable
+	var headers = map[string]string{
+		config.APIKeyHeader: config.APIKey,
+	}
+	req, err := createRequest(config.Verb, config.URL, nil, headers)
 
 	if err != nil {
 		log.Fatal(err)
@@ -46,9 +62,24 @@ func main() {
 
 	resp, err := httpClient.Do(&req)
 
+	log.Print(resp.StatusCode)
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	log.Print(string(body))
+	fmt.Fprintln(w, string(body))
+
 	defer resp.Body.Close()
+
+}
+
+func main() {
+	http.HandleFunc("/", inboundHandler)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
